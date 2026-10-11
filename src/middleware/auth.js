@@ -13,10 +13,10 @@ export async function optionalAuth(req, _res, next) {
       const payload = jwt.verify(token, process.env.JWT_SECRET)
       req.user = await User.findById(payload.sub)
     }
-    next()
   } catch {
-    next()
+    req.user = null
   }
+  next()
 }
 
 export async function requireAuth(req, res, next) {
