@@ -6,7 +6,11 @@
   "scripts": {
     "dev": "nodemon src/server.js",
     "start": "node src/server.js",
-    "test": "node --test"
+    "test": "node --test",
+    "seed": "node src/scripts/seed.js",
+    "admin:make": "node src/scripts/make-admin.js",
+    "admin:reset-password": "node src/scripts/reset-password.js",
+    "backup": "bash scripts/backup.sh"
   },
   "dependencies": {
     "bcryptjs": "^3.0.2",
