@@ -2,80 +2,290 @@ import { Router } from 'express'
 import jwt from 'jsonwebtoken'
 import User from '../models/User.js'
 import { requireAuth } from '../middleware/auth.js'
-import { assert, clean, passwordOk, safeUser, validEmail } from '../utils/validation.js'
-import { isAdminEmail } from '../utils/roles.js'
+import {
+  assert,
+  clean,
+  passwordOk,
+  safeUser,
+  validEmail,
+} from '../utils/validation.js'
 import { createResetToken, sha256 } from '../services/tokens.js'
-import { sendPasswordReset } from '../services/bookingMail.js'
-import { recordAudit } from '../services/audit.js'
-
+import { sendMail, clientUrl } from '../services/email.js'
+import {
+  challengeFor,
+  developmentBypass,
+  verified,
+  readChallenge,
+  issueOtp,
+  otpDigest,
+} from '../services/verification.js'
 const router = Router()
-const signToken = (user) => jwt.sign({ sub: user.id, role: user.role }, process.env.JWT_SECRET, {
-  expiresIn: process.env.JWT_EXPIRES_IN || '7d',
+const session = (user) => ({
+  token: jwt.sign(
+    { sub: user.id, purpose: 'access', version: user.tokenVersion || 0 },
+    process.env.JWT_SECRET,
+    { expiresIn: process.env.JWT_EXPIRES_IN || '1d' },
+  ),
+  user: safeUser(user),
 })
-
 router.post('/register', async (req, res) => {
-  const name = clean(req.body.name)
-  const email = clean(req.body.email).toLowerCase()
-  const password = req.body.password
-  assert(name.length >= 2 && name.length <= 80, 'Name must be between 2 and 80 characters.')
-  assert(validEmail(email), 'A valid email is required.')
-  assert(passwordOk(password), 'Password must be 8 to 72 characters.')
-  assert(!await User.exists({ email }), 'An account with this email already exists.', 409)
-
+  const name = clean(req.body.name),
+    email = clean(req.body.email).toLowerCase(),
+    password = req.body.password
+  assert(
+    name.length >= 2 && name.length <= 80,
+    'Name must be between 2 and 80 characters.',
+  )
+  assert(validEmail(email), 'Please enter a valid email address.')
+  assert(
+    passwordOk(password),
+    'Password must be at least 8 characters and no more than 72 UTF-8 bytes.',
+  )
+  assert(password === req.body.confirmPassword, 'Passwords do not match.')
+  assert(
+    req.body.acceptTerms === true,
+    'Please accept the terms and privacy policy.',
+  )
+  assert(
+    email !== (process.env.ADMIN_EMAIL || '').trim().toLowerCase(),
+    'This email cannot be used for customer signup.',
+    409,
+  )
+  assert(
+    !(await User.exists({ email })),
+    'An account with this email already exists. Sign in or reset your password.',
+    409,
+  )
+  const bypass = developmentBypass()
   const user = await User.create({
     name,
     email,
     passwordHash: await User.hashPassword(password),
-    role: isAdminEmail(email) ? 'admin' : 'user',
+    role: 'user',
+    emailVerified: false,
+    verificationMethod: null,
+    termsAcceptedAt: new Date(),
+    termsVersion: '2026-10-16',
+    marketingOptIn: req.body.marketingOptIn === true,
   })
-  res.status(201).json({ token: signToken(user), user: safeUser(user) })
-})
-
-router.post('/login', async (req, res) => {
-  const email = clean(req.body.email).toLowerCase()
-  const password = typeof req.body.password === 'string' ? req.body.password : ''
-  assert(validEmail(email) && password, 'Email and password are required.')
-  const user = await User.findOne({ email }).select('+passwordHash')
-  assert(user && await user.verifyPassword(password), 'Incorrect email or password.', 401)
-
-  // ADMIN_EMAILS stays the source of truth for admin access, including accounts created before it was set.
-  if (isAdminEmail(email) && user.role !== 'admin') {
-    user.role = 'admin'
-    await user.save()
+  const challenge = challengeFor(user)
+  try {
+    const delivery = await issueOtp(user)
+    res
+      .status(201)
+      .json({ verificationRequired: true, challenge, email, ...delivery })
+  } catch {
+    res.status(201).json({
+      verificationRequired: true,
+      challenge,
+      email,
+      deliveryFailed: true,
+      devBypassAvailable: bypass,
+      message: 'Account created. Use Resend code to retry email delivery.',
+    })
   }
-  res.json({ token: signToken(user), user: safeUser(user) })
 })
-
-router.get('/me', requireAuth, (req, res) => res.json({ user: safeUser(req.user) }))
-
-// Always answers the same way so the form cannot be used to discover which emails have accounts.
+router.post('/login', async (req, res) => {
+  const email = clean(req.body.email).toLowerCase(),
+    password = req.body.password
+  assert(
+    validEmail(email) &&
+      typeof password === 'string' &&
+      password.length > 0 &&
+      Buffer.byteLength(password) <= 72,
+    'Enter a valid email and password.',
+  )
+  const user = await User.findOne({
+    email,
+    role: 'user',
+    envManagedAdmin: { $ne: true },
+  }).select('+passwordHash')
+  assert(
+    user && (await user.verifyPassword(password)),
+    'Incorrect email or password.',
+    401,
+  )
+  await User.updateOne(
+    { _id: user.id, tokenVersion: { $exists: false } },
+    { $set: { tokenVersion: 0 } },
+  )
+  if (!verified(user))
+    return res.json({
+      verificationRequired: true,
+      challenge: challengeFor(user),
+      email: user.email,
+      devBypassAvailable: developmentBypass(),
+    })
+  res.json(session(user))
+})
+router.post('/admin/login', async (req, res) => {
+  const username = clean(req.body.username).toLowerCase(),
+    password = req.body.password
+  assert(
+    username &&
+      typeof password === 'string' &&
+      password.length > 0 &&
+      Buffer.byteLength(password) <= 72,
+    'Enter your admin username and password.',
+  )
+  const user = await User.findOne({
+    adminUsername: username,
+    role: 'admin',
+    envManagedAdmin: true,
+  }).select('+passwordHash')
+  assert(
+    user && (await user.verifyPassword(password)),
+    'Incorrect username or password.',
+    401,
+  )
+  res.json(session(user))
+})
+router.post('/verification/resend', async (req, res) => {
+  const payload = readChallenge(req.body.challenge)
+  const user = await User.findOne({
+    _id: payload.sub,
+    role: 'user',
+    tokenVersion: payload.version,
+  })
+  assert(
+    user && !verified(user),
+    'Verification session is no longer valid.',
+    400,
+  )
+  const delivery = await issueOtp(user)
+  res.json({
+    message: developmentBypass()
+      ? 'Development code generated. It expires in 10 minutes.'
+      : 'A new code has been sent. It expires in 10 minutes.',
+    ...delivery,
+  })
+})
+router.post('/verification/confirm', async (req, res) => {
+  const payload = readChallenge(req.body.challenge),
+    code = clean(req.body.code)
+  assert(/^\d{6}$/.test(code), 'Enter the six-digit email code.')
+  const filter = {
+    _id: payload.sub,
+    role: 'user',
+    tokenVersion: payload.version,
+    otpExpires: { $gt: new Date() },
+    otpAttempts: { $lt: 5 },
+  }
+  const attempt = await User.findOneAndUpdate(
+    filter,
+    { $inc: { otpAttempts: 1 } },
+    { new: true },
+  )
+  assert(attempt, 'Code expired or attempt limit reached. Request a new code.')
+  const user = await User.findOneAndUpdate(
+    {
+      ...filter,
+      otpAttempts: { $lte: 5 },
+      otpHash: otpDigest(payload.sub, code),
+    },
+    {
+      $set: {
+        emailVerified: true,
+        verificationMethod: developmentBypass() ? 'development' : 'brevo',
+      },
+      $unset: { otpHash: 1, otpExpires: 1, otpSentAt: 1 },
+    },
+    { new: true },
+  )
+  assert(
+    user,
+    'Incorrect code. Request a new code after 5 unsuccessful attempts.',
+  )
+  res.json(session(user))
+})
+router.post('/verification/development-bypass', async (req, res) => {
+  assert(
+    developmentBypass(),
+    'This action is available only in development.',
+    404,
+  )
+  const payload = readChallenge(req.body.challenge)
+  const user = await User.findOneAndUpdate(
+    {
+      _id: payload.sub,
+      role: 'user',
+      tokenVersion: payload.version,
+      emailVerified: false,
+    },
+    {
+      $set: { emailVerified: true, verificationMethod: 'development' },
+      $unset: { otpHash: 1, otpExpires: 1, otpSentAt: 1 },
+    },
+    { new: true },
+  )
+  assert(user, 'Verification session is no longer valid.')
+  res.json(session(user))
+})
+router.get('/me', requireAuth, (req, res) =>
+  res.json({ user: safeUser(req.user) }),
+)
+router.post('/logout', requireAuth, async (req, res) => {
+  await User.updateOne({ _id: req.user.id }, { $inc: { tokenVersion: 1 } })
+  res.json({ message: 'Signed out on all devices.' })
+})
 router.post('/forgot-password', async (req, res) => {
   const email = clean(req.body.email).toLowerCase()
-  if (validEmail(email)) {
-    const user = await User.findOne({ email })
-    if (user) {
-      const { token, hash, expires } = createResetToken()
-      await User.updateOne({ _id: user._id }, { resetTokenHash: hash, resetTokenExpires: expires })
-      sendPasswordReset(user, token)
+  assert(validEmail(email), 'Enter a valid email address.')
+  const user = await User.findOne({
+    email,
+    role: 'user',
+    envManagedAdmin: { $ne: true },
+  })
+  if (user) {
+    const { token, hash, expires } = createResetToken()
+    await User.updateOne(
+      { _id: user.id },
+      { $set: { resetTokenHash: hash, resetTokenExpires: expires } },
+    )
+    try {
+      const sent = await sendMail({
+        to: email,
+        subject: 'Reset your Garbhika password',
+        text: `Set a new password within 30 minutes: ${clientUrl()}/reset-password?token=${token}`,
+      })
+      if (!sent)
+        console.warn(
+          'Password-reset email unavailable; configure Brevo or SMTP.',
+        )
+    } catch {
+      console.warn(
+        'Password-reset delivery failed; please check email configuration.',
+      )
     }
   }
-  res.json({ message: 'If an account exists for that email, a reset link has been sent.' })
+  res.json({
+    message: 'If an account exists for that email, a reset link has been sent.',
+  })
 })
-
 router.post('/reset-password', async (req, res) => {
-  const token = clean(req.body.token)
-  const password = req.body.password
-  assert(token.length === 64, 'This reset link is invalid or has expired.')
-  assert(passwordOk(password), 'Password must be 8 to 72 characters.')
-  const user = await User.findOne({ resetTokenHash: sha256(token), resetTokenExpires: { $gt: new Date() } })
+  assert(
+    /^[a-f0-9]{64}$/.test(clean(req.body.token)),
+    'This reset link is invalid or has expired.',
+  )
+  assert(
+    passwordOk(req.body.password),
+    'Password must be at least 8 characters and no more than 72 UTF-8 bytes.',
+  )
+  const user = await User.findOneAndUpdate(
+    {
+      role: 'user',
+      envManagedAdmin: { $ne: true },
+      resetTokenHash: sha256(req.body.token),
+      resetTokenExpires: { $gt: new Date() },
+    },
+    {
+      $set: { passwordHash: await User.hashPassword(req.body.password) },
+      $unset: { resetTokenHash: 1, resetTokenExpires: 1 },
+      $inc: { tokenVersion: 1 },
+    },
+    { new: true },
+  )
   assert(user, 'This reset link is invalid or has expired.')
-
-  user.passwordHash = await User.hashPassword(password)
-  user.resetTokenHash = null
-  user.resetTokenExpires = null
-  await user.save()
-  await recordAudit({ actor: user, action: 'auth.password_reset', resource: 'users', resourceId: user.id })
-  res.json({ message: 'Your password has been updated. You can now log in.' })
+  res.json({ message: 'Password updated. Please sign in again.' })
 })
-
 export default router
