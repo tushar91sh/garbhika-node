@@ -6,11 +6,12 @@
   "scripts": {
     "dev": "nodemon src/server.js",
     "start": "node src/server.js",
-    "test": "node --test",
+    "test": "node --test test/*.test.js",
     "seed": "node src/scripts/seed.js",
     "admin:make": "node src/scripts/make-admin.js",
     "admin:reset-password": "node src/scripts/reset-password.js",
-    "backup": "bash scripts/backup.sh"
+    "backup": "bash scripts/backup.sh",
+    "test:integration": "node --test integration/auth.integration.mjs"
   },
   "dependencies": {
     "bcryptjs": "^3.0.2",
@@ -25,7 +26,11 @@
     "nodemailer": "^7.0.6"
   },
   "devDependencies": {
+    "mongodb-memory-server": "^11.3.0",
     "nodemon": "^3.1.10",
     "supertest": "^7.1.4"
+  },
+  "engines": {
+    "node": ">=20.19.0"
   }
 }

@@ -1,63 +1,30 @@
 # Garbhika API
 
-Production-oriented Express and MongoDB backend for the Garbhika React website.
+See ../SETUP_AUTH_AND_DASHBOARDS.md for complete setup and migration notes. Node.js 20.19+ and MongoDB are required.
 
-## Features
+## Authentication endpoints
 
-- JWT registration, login and current-user endpoint
-- Contact enquiry persistence
-- General and expert-specific consultation booking persistence
-- Newsletter subscription and community membership persistence
-- Experts and community content endpoints used by the existing UI
-- Admin-only paginated records and booking/enquiry status updates
-- Server-side validation, password hashing, security headers, CORS and rate limiting
-- Optional SMTP notification emails
+- POST /api/auth/register: name, email, password, confirmPassword, acceptTerms=true, optional marketingOptIn. Always creates a customer. Always returns a verification challenge and never an access token; signup proceeds to the OTP screen in every environment.
+- POST /api/auth/login: customer email and password. Unverified users receive a verification challenge without an access token.
+- POST /api/auth/admin/login: environment-provisioned admin username and password.
+- POST /api/auth/verification/resend: challenge. Per-account cooldown and hourly limit.
+- POST /api/auth/verification/confirm: challenge and 6-digit code. Five attempts, 10-minute expiry, single-use.
+- POST /api/auth/verification/development-bypass: challenge. Available only for explicit NODE_ENV=development and OTP_DEV_BYPASS=true; requires user action on OTP page.
+- GET /api/auth/me: authenticated current user.
+- POST /api/auth/logout: revokes all sessions for current account.
+- POST /api/auth/forgot-password: customer email. Generic response.
+- POST /api/auth/reset-password: single-use reset token and new password; revokes existing sessions.
 
-## Setup
+## Customer endpoints
 
-```bash
-cd server
-npm install
-cp .env.example .env
-npm run dev
-```
+GET/PATCH /api/me, POST /api/me/password, GET /api/me/bookings, PATCH /api/me/bookings/:id/cancel, PATCH /api/me/journey (stage, dueDate, services, language, context). Profile changes are scoped to the authenticated account. Admin credentials are managed by environment, never by customer APIs.
 
-Set `MONGODB_URI` and a long random `JWT_SECRET` in `server/.env`. The frontend development server proxies `/api` to `http://localhost:5000`.
+## Admin endpoints
 
-From the project root, after installing both dependency sets, run both applications together:
+GET /api/admin/stats, /audit, /:resource, /:resource/:id and /:resource/export.csv. Resources: users (customers only), inquiries, bookings, subscribers and community. PATCH /api/admin/:resource/:id/status for bookings/inquiries. No role-promotion endpoint.
 
-```bash
-npm run dev:all
-```
+## Other endpoints
 
-## Public API
+GET /api/health, /experts, /community, /bookings/availability. POST /api/bookings, /inquiries, /newsletter/subscribe, /community/join. GET /api/newsletter/unsubscribe?token=...
 
-| Method | Endpoint | Purpose |
-| --- | --- | --- |
-| GET | `/api/health` | Health check |
-| POST | `/api/auth/register` | Create account |
-| POST | `/api/auth/login` | Start JWT session |
-| GET | `/api/auth/me` | Return authenticated user |
-| POST | `/api/inquiries` | Submit Contact form |
-| POST | `/api/bookings` | Submit consultation or expert booking |
-| POST | `/api/newsletter/subscribe` | Subscribe email |
-| POST | `/api/community/join` | Join community |
-| GET | `/api/experts` | Get expert cards |
-| GET | `/api/community` | Get community page data |
-
-## Admin API
-
-Register an email listed in `ADMIN_EMAILS`, then send its JWT as `Authorization: Bearer <token>`.
-
-- `GET /api/admin/inquiries`
-- `GET /api/admin/bookings`
-- `GET /api/admin/subscribers`
-- `GET /api/admin/community`
-- `PATCH /api/admin/inquiries/:id/status`
-- `PATCH /api/admin/bookings/:id/status`
-
-List endpoints accept `page` and `limit` query parameters.
-
-## SEO
-
-The frontend now applies the PDF-approved title and meta description for all 17 specified routes, plus canonical and Open Graph tags. `/faqs/` also emits the required `FAQPage` JSON-LD schema containing all ten FAQ pairs.
+Use npm test for lightweight checks and npm run test:integration for disposable-database integration checks. npm run admin:make provisions only the configured environment administrator; it does not promote a public signup.
