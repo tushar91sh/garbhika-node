@@ -1,5 +1,6 @@
 import { Router } from 'express'
-import jwt from 'jsonwebtoken'
+import { issueSession, rotateSession, clearCookie } from '../care/security.js'
+import { Refresh } from '../care/models.js'
 import User from '../models/User.js'
 import { requireAuth } from '../middleware/auth.js'
 import {
@@ -20,14 +21,6 @@ import {
   otpDigest,
 } from '../services/verification.js'
 const router = Router()
-const session = (user) => ({
-  token: jwt.sign(
-    { sub: user.id, purpose: 'access', version: user.tokenVersion || 0 },
-    process.env.JWT_SECRET,
-    { expiresIn: process.env.JWT_EXPIRES_IN || '1d' },
-  ),
-  user: safeUser(user),
-})
 router.post('/register', async (req, res) => {
   const name = clean(req.body.name),
     email = clean(req.body.email).toLowerCase(),
@@ -61,7 +54,7 @@ router.post('/register', async (req, res) => {
     name,
     email,
     passwordHash: await User.hashPassword(password),
-    role: 'user',
+    role: 'mother',
     emailVerified: false,
     verificationMethod: null,
     termsAcceptedAt: new Date(),
@@ -97,7 +90,7 @@ router.post('/login', async (req, res) => {
   )
   const user = await User.findOne({
     email,
-    role: 'user',
+    role: { $in: ['user','mother','expert'] },
     envManagedAdmin: { $ne: true },
   }).select('+passwordHash')
   assert(
@@ -109,14 +102,16 @@ router.post('/login', async (req, res) => {
     { _id: user.id, tokenVersion: { $exists: false } },
     { $set: { tokenVersion: 0 } },
   )
-  if (!verified(user))
+  assert(!['suspended','deleted'].includes(user.status), 'This account is not active.',403)
+  if (!(user.role==='expert'&&user.status==='pending') && !verified(user))
     return res.json({
       verificationRequired: true,
       challenge: challengeFor(user),
       email: user.email,
       devBypassAvailable: developmentBypass(),
     })
-  res.json(session(user))
+  user.lastLoginAt=new Date();await user.save()
+  res.json(await issueSession(user,res))
 })
 router.post('/admin/login', async (req, res) => {
   const username = clean(req.body.username).toLowerCase(),
@@ -130,7 +125,7 @@ router.post('/admin/login', async (req, res) => {
   )
   const user = await User.findOne({
     adminUsername: username,
-    role: 'admin',
+    role: { $in: ['admin','superadmin'] },
     envManagedAdmin: true,
   }).select('+passwordHash')
   assert(
@@ -138,13 +133,14 @@ router.post('/admin/login', async (req, res) => {
     'Incorrect username or password.',
     401,
   )
-  res.json(session(user))
+  assert(user.status!=='suspended'&&user.status!=='deleted','This account is not active.',403)
+  res.json(await issueSession(user,res))
 })
 router.post('/verification/resend', async (req, res) => {
   const payload = readChallenge(req.body.challenge)
   const user = await User.findOne({
     _id: payload.sub,
-    role: 'user',
+    role: { $in: ['user','mother','expert'] },
     tokenVersion: payload.version,
   })
   assert(
@@ -166,7 +162,7 @@ router.post('/verification/confirm', async (req, res) => {
   assert(/^\d{6}$/.test(code), 'Enter the six-digit email code.')
   const filter = {
     _id: payload.sub,
-    role: 'user',
+    role: { $in: ['user','mother','expert'] },
     tokenVersion: payload.version,
     otpExpires: { $gt: new Date() },
     otpAttempts: { $lt: 5 },
@@ -196,7 +192,7 @@ router.post('/verification/confirm', async (req, res) => {
     user,
     'Incorrect code. Request a new code after 5 unsuccessful attempts.',
   )
-  res.json(session(user))
+  res.json(await issueSession(user,res))
 })
 router.post('/verification/development-bypass', async (req, res) => {
   assert(
@@ -208,7 +204,7 @@ router.post('/verification/development-bypass', async (req, res) => {
   const user = await User.findOneAndUpdate(
     {
       _id: payload.sub,
-      role: 'user',
+      role: { $in: ['user','mother','expert'] },
       tokenVersion: payload.version,
       emailVerified: false,
     },
@@ -219,13 +215,20 @@ router.post('/verification/development-bypass', async (req, res) => {
     { new: true },
   )
   assert(user, 'Verification session is no longer valid.')
-  res.json(session(user))
+  res.json(await issueSession(user,res))
+})
+router.post('/refresh', async (req,res) => {
+ const origin=req.get('origin');const allowed=(process.env.CLIENT_URL||'http://localhost:5173').split(',').map(s=>s.trim())
+ assert(!origin||allowed.includes(origin),'Origin not allowed.',403)
+ res.json(await rotateSession(req,res))
 })
 router.get('/me', requireAuth, (req, res) =>
   res.json({ user: safeUser(req.user) }),
 )
 router.post('/logout', requireAuth, async (req, res) => {
   await User.updateOne({ _id: req.user.id }, { $inc: { tokenVersion: 1 } })
+  await Refresh.deleteMany({user:req.user.id})
+  clearCookie(res)
   res.json({ message: 'Signed out on all devices.' })
 })
 router.post('/forgot-password', async (req, res) => {
@@ -233,7 +236,7 @@ router.post('/forgot-password', async (req, res) => {
   assert(validEmail(email), 'Enter a valid email address.')
   const user = await User.findOne({
     email,
-    role: 'user',
+    role: { $in: ['user','mother','expert'] },
     envManagedAdmin: { $ne: true },
   })
   if (user) {
@@ -273,7 +276,7 @@ router.post('/reset-password', async (req, res) => {
   )
   const user = await User.findOneAndUpdate(
     {
-      role: 'user',
+      role: { $in: ['user','mother','expert'] },
       envManagedAdmin: { $ne: true },
       resetTokenHash: sha256(req.body.token),
       resetTokenExpires: { $gt: new Date() },

@@ -16,7 +16,7 @@ router.use(requireAuth)
 router.get('/', (req, res) => res.json({ user: safeUser(req.user) }))
 
 router.patch('/journey', async (req, res) => {
-  assert(req.user.role === 'user', 'Customer account required.', 403)
+  assert(['user','mother'].includes(req.user.role), 'Customer account required.', 403)
   req.user.profile = validateProfile(req.body)
   await req.user.save()
   res.json({ user: safeUser(req.user) })

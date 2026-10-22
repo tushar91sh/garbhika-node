@@ -64,7 +64,7 @@ test('development signup, profile, customer/admin separation and session revocat
   assert.equal(r.body.verificationRequired, true)
   assert.match(r.body.developmentCode, /^\d{6}$/)
   const pending = await User.findOne({ email: signup.email })
-  assert.equal(pending.role, 'user')
+  assert.equal(pending.role, 'mother')
   assert.equal(pending.emailVerified, false)
   const confirmed = await request(app)
     .post('/api/auth/verification/development-bypass')
@@ -122,7 +122,7 @@ test('development signup, profile, customer/admin separation and session revocat
     .set('Authorization', `Bearer ${admin}`)
   assert.equal(r.status, 200)
   assert.equal(r.body.items.length, 1)
-  assert.equal(r.body.items[0].profile.language, 'Hindi')
+  assert.equal(r.body.items[0].profile, undefined, 'admin must receive metadata only')
   assert.equal(r.body.items[0].passwordHash, undefined)
   assert.equal(r.body.items[0].otpHash, undefined)
   assert.equal(

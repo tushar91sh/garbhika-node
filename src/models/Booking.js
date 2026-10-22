@@ -12,16 +12,26 @@ const interests = [
 
 // Fixed consultation times. A booking takes one expert + day + time slot.
 const timeSlots = ['09:00', '10:30', '12:00', '14:00', '15:30', '17:00']
-const statuses = ['requested', 'confirmed', 'completed', 'cancelled']
-const activeStatuses = ['requested', 'confirmed']
+const statuses = ['held','requested','proposed','confirmed','in_progress','completed','cancelled','cancelled_by_mother','cancelled_by_expert','declined','expired','no_show_mother','no_show_expert']
+const activeStatuses = ['requested', 'held', 'confirmed', 'in_progress']
 
 const bookingSchema = new mongoose.Schema(
   {
+    mother: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    expert: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    service: { type: mongoose.Schema.Types.ObjectId, ref: 'Service' },
+    mode: { type: String, enum: ['instant','request'] },
+    startAt: Date, endAt: Date, durationMin: Number,
+    request: { date: String, window: String, noteCipher: String, expiresAt: Date },
+    proposals: [Date], holdUntil: Date, rescheduled: { type: Boolean, default: false },
+    payment: { kind: String, amount: Number, orderId: String, paymentId: String, status: String, captured: Boolean, creditUsed: Boolean, refundedInr: {type:Number,default:0}, refundFraction: Number, refundState: String, refundReason: String, refunded: { type:Boolean, default:false } },
+    roomId: String, roomUrl: String, attendance: { motherJoinAt: Date, expertJoinAt: Date, motherLeaveAt: Date, expertLeaveAt: Date },
+    cancel: { by: String, at: Date, reason: String }, payoutId: { type: mongoose.Schema.Types.ObjectId, ref:'Payout' },
     name: { type: String, required: true, trim: true, maxlength: 80 },
     email: { type: String, required: true, lowercase: true, trim: true },
     preferredDate: { type: Date, required: true },
     dateKey: { type: String, required: true },
-    timeSlot: { type: String, enum: timeSlots, required: true },
+    timeSlot: { type: String, required: true },
     expertKey: { type: String, required: true },
     notes: { type: String, trim: true, maxlength: 3000, default: '' },
     interests: [{ type: String, enum: interests }],

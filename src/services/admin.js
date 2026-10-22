@@ -40,7 +40,7 @@ export async function provisionAdmin() {
       name: 'Garbhika Admin',
       email,
       passwordHash,
-      role: 'admin',
+      role: 'superadmin',
       adminUsername: username,
       envManagedAdmin: true,
       emailVerified: true,
@@ -49,11 +49,11 @@ export async function provisionAdmin() {
     })
   else if (
     existing.adminCredentialFingerprint !== fingerprint ||
-    existing.role !== 'admin'
+    existing.role !== 'superadmin'
   ) {
     existing.set({
       passwordHash,
-      role: 'admin',
+      role: 'superadmin',
       adminUsername: username,
       emailVerified: true,
       verificationMethod: 'admin',
