@@ -1,4 +1,7 @@
 import 'dotenv/config'
+import { loadHealthKey } from './care/storage.js'
+import { attachRealtime } from './care/realtime.js'
+import { startJobs } from './care/jobs.js'
 import { createApp } from './app.js'
 import { connectDatabase } from './config/db.js'
 import { provisionAdmin } from './services/admin.js'
@@ -32,13 +35,17 @@ async function start() {
         'Production requires a JWT_SECRET of at least 32 characters.',
       )
   }
+  await loadHealthKey()
   await connectDatabase()
   await provisionAdmin()
+  const stopJobs = await startJobs()
   const server = createApp().listen(port, () =>
     logger.info(`Garbhika API running on port ${port}`),
   )
+  await attachRealtime(server)
   const shutdown = (signal) => {
     logger.info(`${signal} received, shutting down`)
+    stopJobs()
     server.close(() => process.exit(0))
     setTimeout(() => process.exit(1), 10000).unref()
   }

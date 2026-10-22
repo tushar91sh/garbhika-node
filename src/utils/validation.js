@@ -46,6 +46,8 @@ export function safeUser(user) {
     name: user.name,
     email: user.email,
     role: user.role,
+    interfaceLanguage:user.interfaceLanguage||'en',
+    status: user.status || 'active',
     createdAt: user.createdAt,
     emailVerified: user.emailVerified,
     profile: user.profile,

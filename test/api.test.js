@@ -45,10 +45,10 @@ test('requests without a JSON body do not crash', async () => {
   assert.equal(response.status, 400)
 })
 
-test('booking rejects an unknown time slot before touching the database', async () => {
+test('booking creation requires a verified signed-in mother', async () => {
   const response = await request(app).post('/api/bookings').send({ name: 'Test User', email: 't@example.com', preferredDate: '2030-01-01', timeSlot: '03:00' })
-  assert.equal(response.status, 400)
-  assert.match(response.body.message, /time slot/)
+  assert.equal(response.status, 401)
+  assert.match(response.body.message, /Authentication/)
 })
 
 test('unsubscribe rejects a bad token', async () => {

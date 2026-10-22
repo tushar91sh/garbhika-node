@@ -11,7 +11,11 @@
     "admin:make": "node src/scripts/make-admin.js",
     "admin:reset-password": "node src/scripts/reset-password.js",
     "backup": "bash scripts/backup.sh",
-    "test:integration": "node --test integration/auth.integration.mjs"
+    "test:integration": "node --test integration/*.mjs",
+    "care:migrate": "node scripts/care-migrate.mjs",
+    "test:care": "node --test test/care.test.js",
+    "push:keys": "node -e \"console.log(require('web-push').generateVAPIDKeys())\"",
+    "test:care:integration": "node --test integration/care.integration.mjs"
   },
   "dependencies": {
     "bcryptjs": "^3.0.2",
@@ -23,7 +27,14 @@
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.18.1",
     "morgan": "^1.10.1",
-    "nodemailer": "^7.0.6"
+    "nodemailer": "^7.0.6",
+    "socket.io": "^4.8.1",
+    "web-push": "^3.6.7",
+    "@aws-sdk/client-s3": "^3.900.0",
+    "@aws-sdk/s3-request-presigner": "^3.900.0",
+    "@aws-sdk/client-kms": "^3.900.0",
+    "bullmq": "^5.58.0",
+    "ioredis": "^5.7.0"
   },
   "devDependencies": {
     "mongodb-memory-server": "^11.3.0",
