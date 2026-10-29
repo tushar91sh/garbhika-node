@@ -37,7 +37,8 @@ export function createApp() {
   app.use(ensureBody)
   app.use(morgan(process.env.NODE_ENV === 'production' ? ':id :remote-addr :method :url :status :res[content-length] - :response-time ms' : 'dev'))
   app.use('/api', rateLimit({ windowMs: 15 * 60 * 1000, limit: 900, standardHeaders: 'draft-8', legacyHeaders: false }))
-  app.use('/api/auth', rateLimit({ windowMs: 15 * 60 * 1000, limit: 30 }), authRoutes)
+  // Background account synchronization is a read; keep the strict quota for login/OTP mutations.
+  app.use('/api/auth', rateLimit({ windowMs: 15 * 60 * 1000, limit: 30, skip: req => req.method === 'GET' && req.path === '/me' }), authRoutes)
   app.get('/api/health', (_req, res) => res.json({ status: 'ok', service: 'garbhika-api' }))
   app.use('/api',documentRoutes)
   app.use('/api',groupRoutes)
