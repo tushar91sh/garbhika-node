@@ -1,5 +1,6 @@
 import {applicationChecklist} from './onboarding.js'
 import {scheduledOn,scheduleLabel} from './schedules.js'
+import {bookingReadiness} from './bookability.js'
 import {credentialBlock} from './credentials.js'
 import {loadCarePolicy} from './configuration.js'
 import { Router } from 'express'
@@ -31,13 +32,6 @@ async function audit(req,action,target,before,after,reason){await AuditLog.creat
 async function ownBooking(req){const b=await Booking.findById(id(req.params.id));assert(b,'Booking not found.',404);assert(String(b.mother||b.user)===req.user.id||String(b.expert)===req.user.id||isAdmin(req.user),'Booking not found.',404);return b}
 async function expertClient(req,motherId){assert(await Booking.exists({expert:req.user.id,mother:id(motherId),status:{$in:['confirmed','in_progress','completed']}}),'No eligible booking with this client.',403)}
 router.get('/care/config',async(_req,res)=>{await loadCarePolicy();return res.json({plans,services,redFlags,mockPayments:paymentMock(),videoConfigured:!!process.env.DAILY_API_KEY,keyId:process.env.RAZORPAY_KEY_ID,timezone:'Asia/Kolkata'})})
-router.get('/experts',async(req,res)=>{
- const filter={'verification.status':'approved',accepting:true,$or:[{'verification.expiresAt':{$exists:false}},{'verification.expiresAt':null},{'verification.expiresAt':{$gt:new Date()}}]}
- if(req.query.service){const found=await Service.find({type:req.query.service,active:true}).distinct('expert');filter.user={$in:found}}
- const experts=await Expert.find(filter).populate('user','name').lean(),items=[]
- for(const e of experts){const all=await Service.find({expert:e.user?._id,active:true}).lean();if(!all.length)continue;items.push({...e,services:all,verification:{status:e.verification.status},bank:undefined,lockVersion:undefined})}
- res.json({experts:items,items,total:items.length,page:1,limit:items.length})
-})
 router.get('/experts/:id/slots',async(req,res)=>res.json({items:await slotsFor(id(req.params.id),id(req.query.serviceId),req.query.from,req.query.to)}))
 router.post('/expert/apply',async(req,res)=>{
  const b=req.body;assert(clean(b.name).length>=2&&validEmail(b.email)&&passwordOk(b.password),'Enter a valid name, email and password (8–72 bytes).')
@@ -107,7 +101,13 @@ router.post('/bookings/:id/propose',...expert,async(req,res)=>{
 router.post('/bookings/:id/choose',...mother,async(req,res)=>{const b=await ownBooking(req);assert(b.status==='proposed'&&b.proposals.some(x=>+x===+new Date(req.body.startAt)),'Choose one of the proposed slots.');res.json({booking:await confirmRequest(b,req.body.startAt)})})
 router.post('/bookings/:id/decline',...expert,async(req,res)=>{const b=await ownBooking(req);assert(['requested','proposed'].includes(b.status),'Request is no longer open.',409);assert(clean(req.body.reason).length>=3,'A decline reason is required.');b.status='declined';b.cancel={by:'expert',at:new Date(),reason:clean(req.body.reason)};b.payment.refundFraction=1;await b.save();await refundBooking(b,1);await both(b,'booking.declined','Session request declined');res.json({booking:b})})
 router.get('/bookings/:id/join-token',...auth,async(req,res)=>res.json(await joinToken(await ownBooking(req),req.user,{audioOnly:req.query.audioOnly==='true'})))
-router.get('/expert/profile',...expert,async(req,res)=>res.json({profile:await Expert.findOne({user:req.user.id}),services:await Service.find({expert:req.user.id})}))
+router.get('/expert/profile/booking-readiness',...expert,async(req,res)=>{
+ const profile=await Expert.findOne({user:req.user.id});assert(profile,'Expert profile not found.',404)
+ const services=await Service.find({expert:req.user.id})
+ const availability=await Availability.findOne({expert:req.user.id})
+ res.set('Cache-Control','no-store').json(bookingReadiness(profile,req.user,services,availability))
+})
+router.get('/expert/profile',...expert,async(req,res)=>res.set('Cache-Control','no-store').json({profile:await Expert.findOne({user:req.user.id}),services:await Service.find({expert:req.user.id})}))
 router.put('/expert/profile',...expert,async(req,res)=>{
  const e=await Expert.findOne({user:req.user.id});assert(e,'Profile not found.',404)
  for(const k of ['headline','bio','city','photoUrl'])if(req.body[k]!==undefined)e[k]=clean(req.body[k]).slice(0,k==='bio'?2000:500)
@@ -214,7 +214,7 @@ router.patch('/admin/experts/:id/verification',...admin,async(req,res)=>{
  if(b.status==='approved'){assert(e.verification.status!=='draft','The expert must complete documents and submit the application first.');if(e.verification.documentPolicyVersion===2)assert(applicationChecklist(e).every(x=>x.ready&&x.status==='verified'),'Verify the latest required documents with valid expiry dates before approval.');assert(b.checks.every(Boolean),'Complete all five checks before approval.');assert(!credentialBlock({...e.toObject(),verification:{...e.verification.toObject(),expiresAt:undefined}}),'Verify all required documents with current expiry dates before approval.')}
  if(['rejected','more_info'].includes(b.status))assert(clean(b.reason).length>=3,'Provide a reason.')
  if(b.expiresAt)assert(validDate(b.expiresAt)&&+new Date(b.expiresAt)>Date.now(),'Enter a future credential expiry date.')
- e.verification={...e.verification.toObject(),status:b.status,checks:b.checks,reason:clean(b.reason),expiresAt:b.expiresAt||undefined};e.accepting=b.status==='approved';if(req.user.role==='superadmin'&&b.commissionPct!==undefined){assert([15,20].includes(Number(b.commissionPct)),'Commission must be 15 or 20%.');e.commissionPct=Number(b.commissionPct)}
+ e.verification={...e.verification.toObject(),status:b.status,autoPaused:false,checks:b.checks,reason:clean(b.reason),expiresAt:b.expiresAt||undefined};e.accepting=b.status==='approved';if(req.user.role==='superadmin'&&b.commissionPct!==undefined){assert([15,20].includes(Number(b.commissionPct)),'Commission must be 15 or 20%.');e.commissionPct=Number(b.commissionPct)}
  if(req.user.role==='superadmin')e.isCoach=b.isCoach===true
  await e.save();await User.updateOne({_id:e.user},{$set:{status:b.status==='approved'?'active':'pending',...(b.status==='approved'?{emailVerified:true,verificationMethod:'admin'}:{})}})
  await audit(req,'expert.verification',e.id,before,{status:b.status,checks:b.checks},b.reason);await alert(e.user,'expert.verification','Expert application updated',b.status==='approved'?'Approved. Set your services and availability to begin.':clean(b.reason)||'Your application is under review.');res.json({profile:e})

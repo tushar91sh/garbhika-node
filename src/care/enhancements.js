@@ -1,3 +1,4 @@
+import {bookingReadiness} from './bookability.js'
 import {scheduledOn,scheduleLabel} from './schedules.js'
 import {credentialBlock} from './credentials.js'
 import {weeklyAdherence as adherence} from './schedules.js'
@@ -140,15 +141,15 @@ router.get('/experts',async(req,res)=>{
  if(req.query.service){const eligible=await Service.find({type:req.query.service,active:true}).distinct('expert');filter.user={$in:eligible.filter(x=>activeUsers.some(u=>String(u)===String(x)))}}
  const page=Math.max(1,Number(req.query.page)||1),limit=Math.max(1,Math.min(100,Number(req.query.limit)||25)),items=[]
  if(req.query.date)assert(/^\d{4}-\d{2}-\d{2}$/.test(req.query.date)&&Number.isFinite(Date.parse(req.query.date)),'Invalid date.')
- for(const e of await Expert.find(filter).populate('user','name').lean()){
-  if(credentialBlock(e))continue;const services=await Service.find({expert:e.user?._id,active:true}).lean();if(!services.length)continue
+ for(const e of await Expert.find(filter).populate('user','name status').lean()){
+  if(!e.user||credentialBlock(e))continue;const services=await Service.find({expert:e.user._id,active:true}).lean();const availability=await Availability.findOne({expert:e.user._id}).lean();const readiness=bookingReadiness(e,e.user,services,availability);if(!readiness.listed)continue
   let nextAvailable=null
   const from=req.query.date||istDate(),to=req.query.date||istDate(new Date(Date.now()+7*DAY))
-  for(const service of services.filter(s=>!req.query.service||s.type===req.query.service)){
+  for(const service of services.filter(s=>readiness.modes.instant&&(!req.query.service||s.type===req.query.service))){
    try{const slots=await slotsFor(e.user._id,service._id,from,to,{limit:1});service.nextAvailable=slots[0]?.startAt||null;if(service.nextAvailable&&(!nextAvailable||+service.nextAvailable<+nextAvailable))nextAvailable=service.nextAvailable}catch(err){if(![400,404,409].includes(err.status))throw err}
   }
   if(req.query.date&&!nextAvailable)continue
-  items.push({...e,services,nextAvailable,verification:{status:'approved'},registration:undefined,googleCipher:undefined,bank:undefined,lockVersion:undefined,safetyOnCall:undefined})
+  items.push({_id:e._id,user:{_id:e.user._id,name:e.user.name},headline:e.headline,bio:e.bio,city:e.city,languages:e.languages,yearsExp:e.yearsExp,photoUrl:e.photoUrl,rating:e.rating,reviewCount:e.reviewCount,isCoach:e.isCoach,accepting:true,services,nextAvailable,bookingModes:readiness.modes,verification:{status:'approved'}})
  }
  res.json({experts:items.slice((page-1)*limit,page*limit),items:items.slice((page-1)*limit,page*limit),page,limit,total:items.length})
 })
